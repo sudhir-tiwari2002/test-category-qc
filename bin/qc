@@ -2,14 +2,18 @@
 # qc — one CLI to run the PhysicsWallah admin QC on any device.
 #
 # Subcommands:
-#   qc setup            install Node deps, browser support files (one-time)
-#   qc doctor           verify prerequisites (Node, Chrome, port, tab)
-#   qc launch-chrome    start Chrome with remote debugging on the QC profile
-#   qc run [args]       run the QC against the currently-attached preview tab
-#   qc report           open the most recent HTML report in your browser
-#   qc all              launch-chrome → wait for user → run → report
-#   qc inspect          dump live DOM hints (selector calibration helper)
-#   qc help             show this message
+#   qc setup                          install Node deps, .env (one-time)
+#   qc doctor                         verify prerequisites (Node, Chrome, port, tab)
+#   qc profiles                       list all Chrome profiles on this machine
+#   qc launch-chrome [opts]           start Chrome with remote debugging
+#       --profile <name|dir>          use a specific profile (skip the picker)
+#       --fresh                       start with an empty profile (sign in once)
+#       --reset                       delete the QC profile copy and re-copy
+#   qc run [flags]                    run the QC against the open preview tab
+#   qc report                         open the most recent HTML report
+#   qc all [--profile <name>]         launch-chrome → wait → run → report
+#   qc inspect                        dump live DOM hints (selector helper)
+#   qc help                           show this message
 #
 # Environment / .env values (CDP_PORT, LANGUAGES, MAX_QUESTIONS, OUTPUT_DIR,
 # CATEGORY_URL, SLOW_MO_MS) are honored.
@@ -118,27 +122,113 @@ ${C_BOLD}USAGE${C_RST}
   qc <command> [args]
 
 ${C_BOLD}COMMANDS${C_RST}
-  ${C_GREEN}all${C_RST}              Launch Chrome → wait for you to open a category → run QC → open report
-  ${C_GREEN}setup${C_RST}            One-time install of Node deps & .env
-  ${C_GREEN}doctor${C_RST}           Sanity-check the environment (Node, Chrome, debug port, tab)
-  ${C_GREEN}launch-chrome${C_RST}    Open Chrome with --remote-debugging-port on the QC profile
-  ${C_GREEN}run${C_RST} [flags]      Attach to the open Chrome and QC the active preview tab
-  ${C_GREEN}report${C_RST}           Open the most recent HTML report in your default browser
-  ${C_GREEN}inspect${C_RST}          Dump live DOM hints (used to calibrate selectors)
-  ${C_GREEN}install-global${C_RST}   Symlink ./bin/qc into /usr/local/bin/qc (needs sudo on first run)
-  ${C_GREEN}uninstall-global${C_RST} Remove the global symlink
+  ${C_GREEN}all${C_RST} [opts]                  Launch Chrome (picker) → wait → run QC → open report
+  ${C_GREEN}setup${C_RST}                       One-time install of Node deps & .env
+  ${C_GREEN}doctor${C_RST}                      Sanity-check Node, Chrome, debug port, active tab
+  ${C_GREEN}profiles${C_RST}                    List all Chrome profiles on this machine
+  ${C_GREEN}launch-chrome${C_RST} [opts]        Open Chrome with --remote-debugging-port
+       --profile <name|dir>     Use this profile (e.g. "Sudhir" or "Profile 1")
+       --fresh                  Empty profile — you'll sign in once
+       --reset                  Delete the QC profile copy and re-copy from your real Chrome
+  ${C_GREEN}run${C_RST} [flags]                 Attach to the open Chrome and QC the active preview tab
+  ${C_GREEN}report${C_RST}                      Open the most recent HTML report
+  ${C_GREEN}inspect${C_RST}                     Dump live DOM hints (selector calibration)
+  ${C_GREEN}install-global${C_RST}              Symlink ./bin/qc into /usr/local/bin/qc (sudo first time)
+  ${C_GREEN}uninstall-global${C_RST}            Remove the global symlink
 
 ${C_BOLD}EXAMPLES${C_RST}
   qc setup
-  qc all
+  qc profiles                                  # see which profiles you have
+  qc all                                       # interactive profile picker
+  qc all --profile "Sudhir"                    # skip the picker
+  qc launch-chrome --profile sakshi            # start Chrome only; you'll run QC manually
   qc run --max-questions 5 --languages hi
-  qc run --no-ocr           # skip OCR (faster, but image-only solutions warn instead of fail)
+  qc run --no-ocr                              # faster, image-only solutions warn instead of fail
   qc report
 
 ${C_BOLD}ENV / .env keys${C_RST} (also accepted as flags)
   CDP_PORT (default 9333)   CATEGORY_URL   LANGUAGES (en,hi)
   OUTPUT_DIR (./reports)    MAX_QUESTIONS (0=all)   SLOW_MO_MS
 EOF
+}
+
+# ── profile picker helpers ──────────────────────────────────────────────────────────
+list_profiles_tsv() {
+  if ! command -v node >/dev/null 2>&1; then
+    err "Node.js is required to enumerate Chrome profiles."
+    exit 1
+  fi
+  node "$PROJECT_ROOT/scripts/list-profiles.cjs"
+}
+
+cmd_profiles() {
+  bold "Chrome profiles on this machine:"
+  local found=0
+  while IFS=$'\t' read -r dir name; do
+    [ -z "$dir" ] && continue
+    found=1
+    printf "  %s%-25s%s  →  %s\n" "$C_BOLD" "$name" "$C_RST" "$C_DIM$dir$C_RST"
+  done < <(list_profiles_tsv)
+  if [ "$found" = "0" ]; then
+    warn "No profiles found."
+    exit 1
+  fi
+}
+
+# Resolve a user-given profile identifier (display name OR directory name) to
+# the on-disk profile directory ("Default", "Profile 1", "sakshi", ...).
+# Prints the resolved dir on stdout; exits non-zero with a helpful error if
+# no match.
+resolve_profile() {
+  local needle="$1"
+  local match=""
+  while IFS=$'\t' read -r dir name; do
+    [ -z "$dir" ] && continue
+    if [ "$dir" = "$needle" ] || [ "$name" = "$needle" ]; then
+      match="$dir"
+      break
+    fi
+  done < <(list_profiles_tsv)
+  if [ -z "$match" ]; then
+    err "Profile '$needle' not found. Run:  qc profiles    to see available profiles."
+    exit 1
+  fi
+  printf "%s\n" "$match"
+}
+
+# Interactive picker. Prints the chosen profile DIR (not display name) on stdout.
+# All UI is written to stderr so callers can capture stdout cleanly.
+pick_profile() {
+  local tsv
+  tsv="$(mktemp)"
+  list_profiles_tsv > "$tsv"
+
+  bold "Which Chrome profile do you want to use for QC?" >&2
+  local i=1
+  while IFS=$'\t' read -r dir name; do
+    [ -z "$dir" ] && continue
+    printf "  %s%d)%s  %-25s %s(%s)%s\n" \
+      "$C_BOLD" "$i" "$C_RST" "$name" "$C_DIM" "$dir" "$C_RST" >&2
+    i=$((i+1))
+  done < "$tsv"
+  printf "  %sf)%s  fresh empty profile (sign in once)\n" "$C_BOLD" "$C_RST" >&2
+  printf "  %sq)%s  cancel\n" "$C_BOLD" "$C_RST" >&2
+  printf "Choose [1]: " >&2
+  read -r choice </dev/tty
+  choice="${choice:-1}"
+
+  if [ "$choice" = "q" ] || [ "$choice" = "Q" ]; then
+    rm -f "$tsv"; err "Cancelled."; exit 1
+  fi
+  if [ "$choice" = "f" ] || [ "$choice" = "F" ]; then
+    rm -f "$tsv"; printf "__FRESH__\n"; return 0
+  fi
+
+  local line
+  line="$(awk -v n="$choice" 'NR == n { print; exit }' "$tsv")"
+  rm -f "$tsv"
+  if [ -z "$line" ]; then err "Invalid choice: $choice"; exit 1; fi
+  printf "%s\n" "$(printf "%s" "$line" | cut -f1)"
 }
 
 cmd_setup() {
@@ -186,10 +276,45 @@ cmd_doctor() {
 cmd_launch() {
   require_chrome
   ensure_env
-  PORT="$(get_port)" "$PROJECT_ROOT/scripts/launch-chrome.sh"
+
+  local profile=""
+  local fresh=0
+  local reset=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --profile)      profile="${2:-}"; shift 2 ;;
+      --profile=*)    profile="${1#*=}"; shift ;;
+      --fresh)        fresh=1; shift ;;
+      --reset)        reset=1; shift ;;
+      --help|-h)
+        echo "Usage: qc launch-chrome [--profile <name|dir>] [--fresh] [--reset]"
+        return 0 ;;
+      *)              warn "Unknown launch-chrome flag: $1"; shift ;;
+    esac
+  done
+
+  local profile_dir=""
+  if [ "$fresh" = "1" ]; then
+    profile_dir="Default"
+  elif [ -n "$profile" ]; then
+    profile_dir="$(resolve_profile "$profile")"
+  else
+    profile_dir="$(pick_profile)"
+    if [ "$profile_dir" = "__FRESH__" ]; then
+      fresh=1
+      profile_dir="Default"
+    fi
+  fi
+
+  PORT="$(get_port)" \
+  PROFILE_DIR="$profile_dir" \
+  FRESH="$fresh" \
+  RESET="$reset" \
+    "$PROJECT_ROOT/scripts/launch-chrome.sh"
+
   echo
-  bold "Now in the Chrome window that just opened:"
-  echo "  1) Sign in to PW admin if asked (only the first time)"
+  bold "In the Chrome window that just opened:"
+  echo "  1) Sign in to PW admin if asked (only the first time on a profile)"
   echo "  2) Navigate to the test category you want to QC"
   echo "  3) Click ${C_BOLD}Preview${C_RST} so the question cards are visible"
   echo "  4) Come back to this terminal and run:  ${C_BOLD}qc run${C_RST}"
@@ -237,11 +362,22 @@ cmd_inspect() {
 }
 
 cmd_all() {
-  cmd_launch
+  # Split args into "launch flags" (--profile / --fresh / --reset) vs "run flags" (everything else).
+  local launch_args=() run_args=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --profile)    launch_args+=( "$1" "${2:-}" ); shift 2 ;;
+      --profile=*)  launch_args+=( "$1" ); shift ;;
+      --fresh|--reset) launch_args+=( "$1" ); shift ;;
+      *)            run_args+=( "$1" ); shift ;;
+    esac
+  done
+
+  cmd_launch "${launch_args[@]}"
   echo
   bold "Press ENTER once the preview is open in Chrome and you can see question cards…"
-  read -r _
-  cmd_run "$@"
+  read -r _ </dev/tty
+  cmd_run "${run_args[@]}"
 }
 
 cmd_install_global() {
@@ -275,7 +411,8 @@ case "$SUB" in
   help|-h|--help)         cmd_help ;;
   setup)                  cmd_setup ;;
   doctor)                 cmd_doctor ;;
-  launch-chrome|launch)   cmd_launch ;;
+  profiles|list-profiles) cmd_profiles ;;
+  launch-chrome|launch)   cmd_launch "$@" ;;
   run)                    cmd_run "$@" ;;
   report|open-report)     cmd_report ;;
   inspect)                cmd_inspect "$@" ;;

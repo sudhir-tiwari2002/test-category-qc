@@ -20,33 +20,56 @@ beside each verdict.
 
 ---
 
-## TL;DR — anyone, any device
+## TL;DR — anyone, any device, any Chrome profile
 
 ```bash
-git clone <repo-url> && cd test-category-qc
+git clone https://github.com/sudhir-tiwari2002/test-category-qc.git
+cd test-category-qc
 ./install.sh                # installs Node deps, copies .env, optionally adds `qc` to PATH
 
-qc all                      # launches Chrome → wait for you → runs QC → opens report
+qc all                      # picker → Chrome opens → you open the category → QC runs → report
 ```
 
 That's it. The single `qc` command knows everything; run `qc help` to see it
-all. The rest of this README explains each piece if you need to customize.
+all. The first time you run it, you'll be asked which of your Chrome profiles
+to QC with (or you can pass `--profile "Sudhir"` to skip the picker).
 
 ### The `qc` CLI
 
 | Command | What it does |
 | --- | --- |
 | `qc setup` | One-time install of Node deps + `.env` (same as `./install.sh`) |
-| `qc doctor` | Sanity-check Node, Chrome, debug port, and the active tab |
-| `qc launch-chrome` | Open Chrome with `--remote-debugging-port` on the QC profile |
+| `qc doctor` | Sanity-check Node, Chrome, debug port, active tab |
+| `qc profiles` | List all Chrome profiles on this machine (display name + on-disk dir) |
+| `qc launch-chrome` | Open Chrome with debug port; interactive profile picker by default |
+| `qc launch-chrome --profile "name"` | Skip the picker, use that profile (display name or dir name) |
+| `qc launch-chrome --fresh` | Empty profile — you'll sign into PW admin once, then it persists |
+| `qc launch-chrome --reset` | Delete the QC profile copy and re-copy from your real Chrome |
 | `qc run [flags]` | Attach to Chrome and QC the active preview tab |
 | `qc report` | Open the most recent HTML report |
-| `qc all` | `launch-chrome` → wait → `run` → `report` (one-shot) |
+| `qc all [--profile X]` | `launch-chrome` → wait → `run` → `report` (one-shot) |
 | `qc inspect` | Dump live DOM hints (selector-calibration helper) |
 | `qc install-global` | Symlink `bin/qc` into `/usr/local/bin/qc` |
 | `qc help` | Show all of the above |
 
 Any of `qc run`'s flags map 1:1 onto the underlying CLI flags (see § 4 below).
+
+### Profile picker — what's actually happening
+
+Chrome 136+ refuses to expose `--remote-debugging-port` against your real
+user-data-dir for security reasons. So the script keeps a separate
+`~/chrome-qc-profile` directory which is a copy of your real Chrome data.
+The picker just lets you choose *which* of your profiles inside that copy
+Chrome should open (`--profile-directory=...`).
+
+- **First launch:** copies your real Chrome user-data-dir into
+  `~/chrome-qc-profile` (a few GB if you have many profiles — one-time cost).
+  All your logins/cookies/bookmarks/saved passwords come along.
+- **Switching profiles:** instant — `qc launch-chrome --profile "Other"` just
+  re-launches Chrome with a different `--profile-directory`. No re-copy.
+- **Adding a new profile to the picker later:** Chrome's profile metadata is
+  cached, so if you create a new profile in your real Chrome and want it in
+  the picker, run `qc launch-chrome --reset` once to re-copy.
 
 ---
 
@@ -69,25 +92,31 @@ npx playwright install chromium      # only needed if you ever want Playwright t
 ### Easy way (recommended)
 
 ```bash
-qc launch-chrome          # or:  npm run launch-chrome
+qc launch-chrome                              # interactive profile picker
+qc launch-chrome --profile "Sudhir"           # skip the picker
+qc launch-chrome --profile sakshi --reset     # re-copy + use the "sakshi" profile dir
+qc launch-chrome --fresh                      # empty profile — sign in once
 ```
 
 What it does:
 1. Quits any running Chrome.
-2. **First run only:** copies your default Chrome profile to
-   `~/chrome-qc-profile` so logins, cookies, bookmarks all carry over.
-3. Launches Chrome on port **9333** with `--user-data-dir=~/chrome-qc-profile`.
+2. **First run only:** copies your real Chrome user-data-dir into
+   `~/chrome-qc-profile` (all your profiles + their cookies, bookmarks,
+   logins).
+3. Launches Chrome on port **9333** with
+   `--user-data-dir=~/chrome-qc-profile --profile-directory="<chosen>"`.
 4. Waits until the debug port actually responds.
 5. Prints the live Chrome version info.
 
-Env overrides:
+Env overrides (also exposed as `qc launch-chrome` flags):
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PORT` | `9333` | Override the debug port |
-| `QC_PROFILE` | `~/chrome-qc-profile` | Where the QC-dedicated profile lives |
-| `FRESH=1` | _off_ | Skip the copy — start with an empty profile (you'll need to sign in once) |
-| `RESET=1` | _off_ | Delete the QC profile and re-copy from default |
+| Variable | Flag | Default | Purpose |
+| --- | --- | --- | --- |
+| `PORT` | _(none — set in `.env`)_ | `9333` | Debug port |
+| `QC_PROFILE` | _(none)_ | `~/chrome-qc-profile` | Where the QC profile copy lives |
+| `PROFILE_DIR` | `--profile <name>` | `Default` | Which profile (display name or on-disk dir) |
+| `FRESH=1` | `--fresh` | _off_ | Skip the copy — empty profile (sign in once) |
+| `RESET=1` | `--reset` | _off_ | Delete the QC profile copy and re-copy |
 
 ### Why port 9333 (not 9222)?
 
@@ -236,7 +265,7 @@ test-category-qc/
 ## 9. Take this to another device
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/sudhir-tiwari2002/test-category-qc.git
 cd test-category-qc
 ./install.sh
 qc all
@@ -244,7 +273,16 @@ qc all
 
 The installer covers Node deps, `.env` bootstrap, and (optionally) globally
 installs `qc`. The first `qc launch-chrome` clones your existing Chrome
-profile into `~/chrome-qc-profile` so logins carry over — no re-signing into
-PW admin required. After that you only ever need `qc all` (or split into
-`qc launch-chrome` → `qc run` → `qc report`).
+user-data-dir into `~/chrome-qc-profile` so logins for ALL your profiles
+carry over — no re-signing into PW admin required.
+
+After that you only ever need:
+
+```bash
+qc all                              # interactive profile picker each run
+qc all --profile "Sudhir"           # remember a default — same profile every run
+```
+
+or split into `qc launch-chrome` → `qc run` → `qc report` if you want manual
+control between steps.
 
