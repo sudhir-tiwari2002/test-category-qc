@@ -1,0 +1,20 @@
+node_modules/
+dist/
+reports/
+.env
+
+.DS_Store
+*.log
+playwright-report/
+test-results/
+
+# Tesseract.js downloads these to its own cache on first OCR run; the root-level
+# copies left over from manual experiments are not used and add ~7 MB of binary.
+eng.traineddata
+hin.traineddata
+
+# Local QC debug screenshots / one-off image dumps.
+assets/
+
+# Per-developer transcripts created by the IDE.
+agent-transcripts/

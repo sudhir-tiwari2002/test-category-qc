@@ -1,0 +1,286 @@
+#!/usr/bin/env bash
+# qc — one CLI to run the PhysicsWallah admin QC on any device.
+#
+# Subcommands:
+#   qc setup            install Node deps, browser support files (one-time)
+#   qc doctor           verify prerequisites (Node, Chrome, port, tab)
+#   qc launch-chrome    start Chrome with remote debugging on the QC profile
+#   qc run [args]       run the QC against the currently-attached preview tab
+#   qc report           open the most recent HTML report in your browser
+#   qc all              launch-chrome → wait for user → run → report
+#   qc inspect          dump live DOM hints (selector calibration helper)
+#   qc help             show this message
+#
+# Environment / .env values (CDP_PORT, LANGUAGES, MAX_QUESTIONS, OUTPUT_DIR,
+# CATEGORY_URL, SLOW_MO_MS) are honored.
+#
+# To install globally:
+#   ./bin/qc install-global   # symlinks into /usr/local/bin/qc
+set -euo pipefail
+
+# ── resolve the project root regardless of where the script lives or how it's invoked ─
+SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_ROOT"
+
+# ── pretty print helpers (work on any POSIX-ish terminal) ───────────────────────────
+if [ -t 1 ] && command -v tput >/dev/null 2>&1; then
+  C_BOLD="$(tput bold)"; C_DIM="$(tput dim)"; C_RST="$(tput sgr0)"
+  C_GREEN="$(tput setaf 2)"; C_RED="$(tput setaf 1)"; C_YEL="$(tput setaf 3)"; C_BLU="$(tput setaf 4)"
+else
+  C_BOLD=""; C_DIM=""; C_RST=""; C_GREEN=""; C_RED=""; C_YEL=""; C_BLU=""
+fi
+bold()  { printf "%s%s%s\n" "$C_BOLD" "$*" "$C_RST"; }
+ok()    { printf "%s✓%s %s\n" "$C_GREEN" "$C_RST" "$*"; }
+warn()  { printf "%s⚠%s %s\n" "$C_YEL" "$C_RST" "$*"; }
+err()   { printf "%s✗%s %s\n" "$C_RED" "$C_RST" "$*" >&2; }
+step()  { printf "%s▸%s %s\n" "$C_BLU" "$C_RST" "$*"; }
+
+# ── prerequisite checks ─────────────────────────────────────────────────────────────
+require_node() {
+  if ! command -v node >/dev/null 2>&1; then
+    err "Node.js not found in PATH."
+    cat <<'EOF'
+
+  Install Node.js 18.18+ from one of:
+    • https://nodejs.org           (official installer)
+    • brew install node            (macOS, Homebrew)
+    • nvm install --lts            (any platform with nvm)
+
+EOF
+    exit 1
+  fi
+  local v
+  v="$(node -p 'process.versions.node')"
+  local major="${v%%.*}"
+  if [ "$major" -lt 18 ]; then
+    err "Node $v is too old. Need >= 18.18 (LTS recommended)."
+    exit 1
+  fi
+}
+
+require_chrome() {
+  case "$(uname -s)" in
+    Darwin)
+      if [ ! -d "/Applications/Google Chrome.app" ]; then
+        err "Google Chrome not found at /Applications/Google Chrome.app"
+        echo "    Download: https://www.google.com/chrome/"
+        exit 1
+      fi
+      ;;
+    Linux)
+      if ! command -v google-chrome >/dev/null 2>&1 && ! command -v chromium >/dev/null 2>&1; then
+        err "Google Chrome / Chromium not found in PATH."
+        exit 1
+      fi
+      ;;
+    *)
+      warn "Unrecognized OS ($(uname -s)) — Chrome auto-detection skipped."
+      ;;
+  esac
+}
+
+ensure_deps() {
+  if [ ! -d "$PROJECT_ROOT/node_modules" ] || [ ! -f "$PROJECT_ROOT/node_modules/.qc-installed" ]; then
+    step "Installing Node dependencies (first run only)…"
+    require_node
+    (cd "$PROJECT_ROOT" && npm install --no-audit --no-fund)
+    touch "$PROJECT_ROOT/node_modules/.qc-installed"
+    ok "Dependencies installed."
+  fi
+}
+
+ensure_env() {
+  if [ ! -f "$PROJECT_ROOT/.env" ] && [ -f "$PROJECT_ROOT/.env.example" ]; then
+    cp "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
+    ok "Created .env from .env.example (you can edit later)."
+  fi
+}
+
+get_port() {
+  local p="${CDP_PORT:-}"
+  if [ -z "$p" ] && [ -f "$PROJECT_ROOT/.env" ]; then
+    p="$(grep -E '^CDP_PORT=' "$PROJECT_ROOT/.env" | head -1 | cut -d= -f2- | tr -d ' \r')"
+  fi
+  printf "%s" "${p:-9333}"
+}
+
+# ── subcommands ─────────────────────────────────────────────────────────────────────
+cmd_help() {
+  cat <<EOF
+${C_BOLD}qc${C_RST} — PhysicsWallah admin test-category QC
+
+${C_BOLD}USAGE${C_RST}
+  qc <command> [args]
+
+${C_BOLD}COMMANDS${C_RST}
+  ${C_GREEN}all${C_RST}              Launch Chrome → wait for you to open a category → run QC → open report
+  ${C_GREEN}setup${C_RST}            One-time install of Node deps & .env
+  ${C_GREEN}doctor${C_RST}           Sanity-check the environment (Node, Chrome, debug port, tab)
+  ${C_GREEN}launch-chrome${C_RST}    Open Chrome with --remote-debugging-port on the QC profile
+  ${C_GREEN}run${C_RST} [flags]      Attach to the open Chrome and QC the active preview tab
+  ${C_GREEN}report${C_RST}           Open the most recent HTML report in your default browser
+  ${C_GREEN}inspect${C_RST}          Dump live DOM hints (used to calibrate selectors)
+  ${C_GREEN}install-global${C_RST}   Symlink ./bin/qc into /usr/local/bin/qc (needs sudo on first run)
+  ${C_GREEN}uninstall-global${C_RST} Remove the global symlink
+
+${C_BOLD}EXAMPLES${C_RST}
+  qc setup
+  qc all
+  qc run --max-questions 5 --languages hi
+  qc run --no-ocr           # skip OCR (faster, but image-only solutions warn instead of fail)
+  qc report
+
+${C_BOLD}ENV / .env keys${C_RST} (also accepted as flags)
+  CDP_PORT (default 9333)   CATEGORY_URL   LANGUAGES (en,hi)
+  OUTPUT_DIR (./reports)    MAX_QUESTIONS (0=all)   SLOW_MO_MS
+EOF
+}
+
+cmd_setup() {
+  bold "Setting up qc in $PROJECT_ROOT"
+  require_node
+  require_chrome
+  ensure_deps
+  ensure_env
+  ok "Setup complete."
+  echo
+  echo "Next steps:"
+  echo "  1)  qc all      (or:  qc launch-chrome  →  open category in Chrome  →  qc run)"
+}
+
+cmd_doctor() {
+  local port; port="$(get_port)"
+  bold "qc doctor — checking environment"
+  require_node;   ok "Node $(node -v)"
+  require_chrome; ok "Chrome found"
+
+  if [ -d "$PROJECT_ROOT/node_modules" ]; then
+    ok "node_modules present"
+  else
+    warn "node_modules missing — run:  qc setup"
+  fi
+
+  if curl -sS -m 2 "http://127.0.0.1:${port}/json/version" >/dev/null 2>&1; then
+    ok "Chrome debug port ${port} is live"
+    local tab; tab="$(curl -sS "http://127.0.0.1:${port}/json" | node -e '
+      let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+        try { const t=JSON.parse(s).find(x=>x.type==="page"); if(t) console.log(t.url||""); } catch(_){}
+      });')"
+    if [ -n "$tab" ]; then
+      ok "Active tab: $tab"
+    else
+      warn "No page-type tab found yet — open the test category in Chrome."
+    fi
+  else
+    warn "Chrome debug port ${port} is NOT live — run:  qc launch-chrome"
+  fi
+  echo
+  echo "If everything above is green, you're ready:  qc run"
+}
+
+cmd_launch() {
+  require_chrome
+  ensure_env
+  PORT="$(get_port)" "$PROJECT_ROOT/scripts/launch-chrome.sh"
+  echo
+  bold "Now in the Chrome window that just opened:"
+  echo "  1) Sign in to PW admin if asked (only the first time)"
+  echo "  2) Navigate to the test category you want to QC"
+  echo "  3) Click ${C_BOLD}Preview${C_RST} so the question cards are visible"
+  echo "  4) Come back to this terminal and run:  ${C_BOLD}qc run${C_RST}"
+}
+
+cmd_run() {
+  require_node
+  ensure_deps
+  ensure_env
+  local port; port="$(get_port)"
+  if ! curl -sS -m 2 "http://127.0.0.1:${port}/json/version" >/dev/null 2>&1; then
+    err "Chrome debug port ${port} is not reachable."
+    echo "    Run:  qc launch-chrome    then open the category preview."
+    exit 1
+  fi
+  step "Running QC against http://127.0.0.1:${port}…"
+  (cd "$PROJECT_ROOT" && CDP_PORT="$port" npx --no-install tsx src/index.ts "$@")
+  ok "Run complete. Opening the report…"
+  cmd_report
+}
+
+cmd_report() {
+  local latest
+  latest="$(ls -1t "$PROJECT_ROOT/reports/"qc-report-*.html 2>/dev/null | head -1 || true)"
+  if [ -z "$latest" ]; then
+    err "No reports found in $PROJECT_ROOT/reports/. Run:  qc run"
+    exit 1
+  fi
+  case "$(uname -s)" in
+    Darwin) open "$latest" ;;
+    Linux)
+      if command -v xdg-open >/dev/null; then xdg-open "$latest" >/dev/null 2>&1 || true
+      else echo "Open in your browser: $latest"
+      fi ;;
+    *) echo "Open in your browser: $latest" ;;
+  esac
+  ok "Opened: $latest"
+}
+
+cmd_inspect() {
+  require_node
+  ensure_deps
+  local port; port="$(get_port)"
+  (cd "$PROJECT_ROOT" && CDP_PORT="$port" npx --no-install tsx src/inspect.ts "$@")
+}
+
+cmd_all() {
+  cmd_launch
+  echo
+  bold "Press ENTER once the preview is open in Chrome and you can see question cards…"
+  read -r _
+  cmd_run "$@"
+}
+
+cmd_install_global() {
+  local target="/usr/local/bin/qc"
+  local src="$PROJECT_ROOT/bin/qc"
+  chmod +x "$src"
+  if [ -w "$(dirname "$target")" ]; then
+    ln -sf "$src" "$target"
+  else
+    bold "Symlinking $src → $target (sudo required)"
+    sudo ln -sf "$src" "$target"
+  fi
+  ok "Installed. You can now run ${C_BOLD}qc${C_RST} from anywhere."
+}
+
+cmd_uninstall_global() {
+  local target="/usr/local/bin/qc"
+  if [ -L "$target" ]; then
+    if [ -w "$(dirname "$target")" ]; then rm -f "$target"
+    else sudo rm -f "$target"
+    fi
+    ok "Removed $target"
+  else
+    warn "$target is not a symlink (nothing to remove)."
+  fi
+}
+
+# ── dispatch ────────────────────────────────────────────────────────────────────────
+SUB="${1:-help}"; shift || true
+case "$SUB" in
+  help|-h|--help)         cmd_help ;;
+  setup)                  cmd_setup ;;
+  doctor)                 cmd_doctor ;;
+  launch-chrome|launch)   cmd_launch ;;
+  run)                    cmd_run "$@" ;;
+  report|open-report)     cmd_report ;;
+  inspect)                cmd_inspect "$@" ;;
+  all)                    cmd_all "$@" ;;
+  install-global)         cmd_install_global ;;
+  uninstall-global)       cmd_uninstall_global ;;
+  *) err "Unknown subcommand: $SUB"; echo; cmd_help; exit 2 ;;
+esac
