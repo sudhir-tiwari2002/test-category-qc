@@ -22,11 +22,11 @@ export interface AttachOptions {
  * Connect Playwright to an already-running Chrome that was launched with:
  *
  *   open -na "Google Chrome" --args \
- *     --remote-debugging-port=9222 \
- *     --user-data-dir="$HOME/Library/Application Support/Google/Chrome" \
- *     --profile-directory="Profile X"   # whichever profile Sakshi uses
+ *     --remote-debugging-port=9333 \
+ *     --user-data-dir="$HOME/chrome-qc-profile" \
+ *     --profile-directory="Profile X"   # whichever profile you chose in the picker
  *
- * (See README for the full launcher command.)
+ * (Use `qc launch-chrome` — it builds the exact command for you.)
  */
 export async function attachToChrome(opts: AttachOptions): Promise<AttachedSession> {
   // Try IPv4 first, then IPv6, then "localhost". Node 18 on macOS resolves
@@ -66,13 +66,13 @@ export async function attachToChrome(opts: AttachOptions): Promise<AttachedSessi
 
   const contexts = browser.contexts();
   if (contexts.length === 0) {
-    throw new Error("Chrome is connected but no browser contexts are open. Open at least one tab in Sakshi's profile.");
+    throw new Error("Chrome is connected but no browser contexts are open. Open at least one tab in the QC Chrome window.");
   }
 
   const context = contexts[0]; // default context = persistent profile
   const pages = context.pages();
   if (pages.length === 0) {
-    throw new Error("No open tabs found in Sakshi's profile. Open the test category page first.");
+    throw new Error("No open tabs found in the QC Chrome window. Open the test category preview tab first.");
   }
 
   let page: Page | undefined;

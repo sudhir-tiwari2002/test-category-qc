@@ -12,7 +12,7 @@
 # Usage:
 #   PROFILE_DIR=Default ./scripts/launch-chrome.sh         # use "Default" profile
 #   PROFILE_DIR="Profile 1" ./scripts/launch-chrome.sh     # use "Profile 1"
-#   PORT=9444 PROFILE_DIR=sakshi ./scripts/launch-chrome.sh
+#   PORT=9444 PROFILE_DIR="Profile 2" ./scripts/launch-chrome.sh
 #   FRESH=1 ./scripts/launch-chrome.sh                     # empty profile, sign in once
 #   RESET=1 ./scripts/launch-chrome.sh                     # delete QC profile + re-copy
 #

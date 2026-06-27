@@ -1,7 +1,7 @@
 # test-category-qc
 
 Automated QC / sanity for a **PhysicsWallah admin test category in preview
-mode**. Attaches to Sakshi's already-open Chrome, auto-scrolls through every
+mode**. Attaches to your already-open Chrome, auto-scrolls through every
 question card on the preview page, and for **both English and Hindi** verifies:
 
 | # | Check | What it asserts |
@@ -32,7 +32,8 @@ qc all                      # picker → Chrome opens → you open the category 
 
 That's it. The single `qc` command knows everything; run `qc help` to see it
 all. The first time you run it, you'll be asked which of your Chrome profiles
-to QC with (or you can pass `--profile "Sudhir"` to skip the picker).
+to QC with (or you can pass `--profile "Personal"` to skip the picker — use
+whatever name appears under `qc profiles`).
 
 ### The `qc` CLI
 
@@ -93,8 +94,8 @@ npx playwright install chromium      # only needed if you ever want Playwright t
 
 ```bash
 qc launch-chrome                              # interactive profile picker
-qc launch-chrome --profile "Sudhir"           # skip the picker
-qc launch-chrome --profile sakshi --reset     # re-copy + use the "sakshi" profile dir
+qc launch-chrome --profile "Personal"         # skip the picker (use the name from `qc profiles`)
+qc launch-chrome --profile "Profile 1" --reset  # re-copy + use this on-disk profile dir
 qc launch-chrome --fresh                      # empty profile — sign in once
 ```
 
@@ -280,7 +281,7 @@ After that you only ever need:
 
 ```bash
 qc all                              # interactive profile picker each run
-qc all --profile "Sudhir"           # remember a default — same profile every run
+qc all --profile "Personal"         # remember a default — same profile every run
 ```
 
 or split into `qc launch-chrome` → `qc run` → `qc report` if you want manual

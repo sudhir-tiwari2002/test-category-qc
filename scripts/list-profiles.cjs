@@ -6,8 +6,8 @@
  *     <profile-dir>\t<display-name>
  *
  * "profile-dir" is what Chrome calls it on disk ("Default", "Profile 1", ...).
- * "display-name" is what the user sees in the avatar menu ("Sakshi Upadhyay",
- * etc.) — pulled from the user_data_dir/Local State JSON file.
+ * "display-name" is what the user sees in the avatar menu (e.g. "Personal",
+ * "Work") — pulled from the user_data_dir/Local State JSON file.
  *
  * Default profile is always listed first; the rest are sorted alphabetically.
  */

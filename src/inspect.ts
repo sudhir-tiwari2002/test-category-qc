@@ -1,5 +1,5 @@
 /**
- * Auto-inspect the currently open preview tab in Sakshi's Chrome and dump
+ * Auto-inspect the currently open preview tab in the attached Chrome and dump
  * everything we need to fill in config/selectors.ts.
  *
  * Run with:  npm run inspect

@@ -127,7 +127,7 @@ ${C_BOLD}COMMANDS${C_RST}
   ${C_GREEN}doctor${C_RST}                      Sanity-check Node, Chrome, debug port, active tab
   ${C_GREEN}profiles${C_RST}                    List all Chrome profiles on this machine
   ${C_GREEN}launch-chrome${C_RST} [opts]        Open Chrome with --remote-debugging-port
-       --profile <name|dir>     Use this profile (e.g. "Sudhir" or "Profile 1")
+       --profile <name|dir>     Use this profile (display name from "qc profiles", or on-disk dir like "Profile 1")
        --fresh                  Empty profile — you'll sign in once
        --reset                  Delete the QC profile copy and re-copy from your real Chrome
   ${C_GREEN}run${C_RST} [flags]                 Attach to the open Chrome and QC the active preview tab
@@ -140,8 +140,8 @@ ${C_BOLD}EXAMPLES${C_RST}
   qc setup
   qc profiles                                  # see which profiles you have
   qc all                                       # interactive profile picker
-  qc all --profile "Sudhir"                    # skip the picker
-  qc launch-chrome --profile sakshi            # start Chrome only; you'll run QC manually
+  qc all --profile "Personal"                  # skip the picker (use the name from "qc profiles")
+  qc launch-chrome --profile "Profile 1"       # start Chrome only; you'll run QC manually
   qc run --max-questions 5 --languages hi
   qc run --no-ocr                              # faster, image-only solutions warn instead of fail
   qc report
@@ -176,7 +176,7 @@ cmd_profiles() {
 }
 
 # Resolve a user-given profile identifier (display name OR directory name) to
-# the on-disk profile directory ("Default", "Profile 1", "sakshi", ...).
+# the on-disk profile directory ("Default", "Profile 1", "Profile 2", ...).
 # Prints the resolved dir on stdout; exits non-zero with a helpful error if
 # no match.
 resolve_profile() {
